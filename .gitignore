@@ -1,0 +1,43 @@
+# 敏感配置（含账号密码、API key）
+config.json
+*.bak
+
+# 运行状态与日志
+trader/state.json
+trader/logs/
+trader/reports/
+logs/
+reports/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+build/
+dist/
+*.egg-info/
+.venv/
+venv/
+
+# 数据文件（体积大，且需要自行从券商导出）
+*.csv
+*.hst
+*.hcc
+
+# 编辑器与系统
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# 编译产物
+*.ex5
+*.ex4
+
+# 临时文件
+*.tmp
+*.log
+compile_*.log

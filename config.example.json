@@ -1,0 +1,111 @@
+{
+  "_说明": "配置模板。复制为 config.json 后填入你自己的账号和 API key。",
+  "symbol": "XAUUSD",
+  "timeframe": "M5",
+  "analysis_timeframe_1": "H4",
+  "account": {
+    "initial_equity": 1000000.0,
+    "base_lot": 1.0,
+    "contract_size": 100.0
+  },
+  "strategy": {
+    "fast_ema": 5,
+    "slow_ema": 20,
+    "signal_ema": 30,
+    "weight_body": 0.7,
+    "weight_shadow": 0.3
+  },
+  "vol_risk": {
+    "atr_period_1": 3,
+    "atr_period_2": 10,
+    "ma_period": 20,
+    "atrp_factor": 1.4,
+    "_note_factor": "硬下限 1.4。统一口径回测(含点差0.08):H1上1.4最优(卡玛1.21)，M5/H4上1.6略优，差异在噪声范围内，取1.4作为保守值。",
+    "weight_vol": 0.9
+  },
+  "daily_analyst": {
+    "lookback_days": 250,
+    "vol_window": 20,
+    "atr_window": 14,
+    "pct_gate": 98.0,
+    "_note": "流动性百分位 > pct_gate 时当天不开新仓（只做不做，不调量）"
+  },
+  "event_layer": {
+    "enabled": true,
+    "weight_event": 0.1,
+    "jin10_app_id": "bVBF4FyRTn5NJF5n",
+    "only_important": true,
+    "max_events_per_check": 5,
+    "poll_seconds": 300,
+    "models": [
+      {
+        "name": "deepseek",
+        "enabled": true,
+        "base_url": "https://api.deepseek.com",
+        "model": "deepseek-chat",
+        "api_key": ""
+      },
+      {
+        "name": "backup_1",
+        "enabled": false,
+        "base_url": "https://api.example.com/v1",
+        "model": "some-model",
+        "api_key": ""
+      }
+    ],
+    "_note": "事件层 = 订单风控的一半权重。多模型平均 severity，超过阈值平一半仓位"
+  },
+  "schedule": {
+    "flat_before_newyork_close_minutes": 5,
+    "newyork_close_utc_hours": 21,
+    "_note": "纽约 17:00 EDT = 21:00 UTC；冬令时 16:00 EST = 22:00 UTC，程序会按夏令时自动调整",
+    "daily_report_time_local": "23:00",
+    "daily_report_hour": 20,
+    "_daily_report_hour说明": "每天几点生成战报（24小时制）。战报生成后要在签字页读完才能签字"
+  },
+  "approval": {
+    "valid_hours": 24.0,
+    "_note": "签字后 24 小时内可开新仓；过期只平仓不开新仓，不中断程序的运行"
+  },
+  "broker": {
+    "mode": "mt5",
+    "_note": "paper = 纸面模拟（只记录）| mt5 = 真实连 MT5 模拟账户",
+    "initial_position": 0,
+    "mt5": {
+      "login": 0,
+      "password": "",
+      "server": "YourBroker-Demo",
+      "path": "C:\\Program Files\\MetaTrader 5\\terminal64.exe",
+      "_note": "path 留空则自动查找 MT5 客户端；如果连不上，填 MT5 的 terminal64.exe 路径",
+      "symbol": "XAUUSD",
+      "magic": 20261124
+    }
+  },
+  "logging": {
+    "log_dir": "logs",
+    "state_file": "state.json",
+    "trade_log": "logs/trades.csv",
+    "event_log": "logs/events.csv",
+    "daily_dir": "reports"
+  },
+  "market_data": {
+    "source": "mt5",
+    "_note": "csv = 本地MT4回放 | xaus = 实时现货(xaus.com) | mt5 = MT5客户端(备用,未实现)",
+    "xaus_poll_seconds": 300,
+    "backup": {
+      "enabled": false,
+      "type": "mt5",
+      "_note": "备用数据源，暂不填。将来接 MT5 时改这里",
+      "path": ""
+    }
+  },
+  "order_risk": {
+    "_说明": "对已有持仓的减仓规则。两条规则各占 0.5 权重，地位平等。",
+    "weight_vol": 0.5,
+    "weight_event": 0.5,
+    "event_threshold": 0.9,
+    "_event_threshold说明": "LLM 平均 severity 达到这个值，平掉一半仓位",
+    "cut_ratio": 0.5,
+    "_cut_ratio说明": "每次触发平掉的比例（相对原始手数）"
+  }
+}
