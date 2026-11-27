@@ -332,8 +332,12 @@ class App:
         self._report_read = True
         try:
             st = M.load_state(self.state_path, self.cfg)
+            st = M.load_state(self.state_path, self.cfg)
             st["_report_read_date"] = self._report_date
-            M.save_state(self.state_path, st)
+            tmp = self.state_path + ".tmp"
+            with io.open(tmp, "w", encoding="utf-8") as f:
+                json.dump(st, f, ensure_ascii=False, indent=2, default=str)
+            os.replace(tmp, self.state_path)
         except Exception:
             pass
         self.report_msg.config(text="✓ 已读完战报", fg=OKC)
@@ -815,10 +819,15 @@ class App:
             return
         now = datetime.datetime.now(datetime.UTC)
         until = now + datetime.timedelta(hours=hours)
+        # 先读磁盘最新状态，避免覆盖主循环刚写进去的东西
         st = M.load_state(self.state_path, self.cfg)
         st["approved_until"] = until.isoformat()
         st["approved_at"] = now.isoformat()
-        M.save_state(self.state_path, st)
+        # 不走 M.save_state（它会先同步磁盘字段，把我们刚设的值冲掉）
+        tmp = self.state_path + ".tmp"
+        with io.open(tmp, "w", encoding="utf-8") as f:
+            json.dump(st, f, ensure_ascii=False, indent=2, default=str)
+        os.replace(tmp, self.state_path)
         self._push_log(f"[签字] 有效期至 {until.astimezone():%Y-%m-%d %H:%M}", "ok")
         self._update_approve_tab(st)
 

@@ -64,10 +64,20 @@ def rolling_percentile(series: pd.Series, lookback: int = 250) -> pd.Series:
 def compute_daily_state(d1: pd.DataFrame,
                         lookback: int = 250,
                         vol_window: int = 20,
-                        atr_window: int = 14) -> pd.DataFrame:
+                        atr_window: int = 14,
+                        vix: pd.Series = None) -> pd.DataFrame:
     """
-    输入日线 OHLC，输出每天的百分位和系数。
-    返回 DataFrame：vol_pct, atr_pct, combined_pct, coeff
+    输入日线 OHLC（可选 VIX），输出每天的百分位和系数。
+
+    三路独立信号（各自算自己的历史百分位）：
+      已实现波动率（20日）  ← 黄金自己
+      ATR%（14日）         ← 黄金自己
+      VIX（日线）          ← 市场恐慌/流动性前瞻
+
+    ★ 取最大值：任何一路报警就算报警
+    ★ 阈值：≥98% 暂停，90-98% 减半，<90% 正常
+
+    返回 DataFrame：rv_pct / atr_pct_pct / vix_pct / max_pct / driving / coeff
     """
     rv = realized_vol(d1, vol_window)
     ap = atr_pct(d1, atr_window)
@@ -75,15 +85,85 @@ def compute_daily_state(d1: pd.DataFrame,
     rv_pct = rolling_percentile(rv, lookback)
     ap_pct = rolling_percentile(ap, lookback)
 
-    combined = (rv_pct + ap_pct) / 2.0
+    cols = {"rv": rv, "atr_pct": ap,
+            "rv_pct": rv_pct, "atr_pct_pct": ap_pct}
 
-    out = pd.DataFrame({
-        "rv": rv, "atr_pct": ap,
-        "rv_pct": rv_pct, "atr_pct_pct": ap_pct,
-        "combined_pct": combined,
-    })
-    out["coeff"] = out["combined_pct"].apply(pct_to_coeff)
+    if vix is not None and len(vix) > 0:
+        # VIX 对齐到黄金的日线时间轴（用 ffill，保证没有未来数据）
+        v = vix.reindex(d1.index.union(vix.index)).ffill().reindex(d1.index)
+        cols["vix_pct"] = rolling_percentile(v.astype(float), lookback)
+    else:
+        cols["vix_pct"] = pd.Series(float("nan"), index=d1.index)
+
+    out = pd.DataFrame(cols)
+
+    # 取三路最大
+    pct_cols = ["rv_pct", "atr_pct_pct", "vix_pct"]
+    mats = out[pct_cols]
+    out["max_pct"] = mats.max(axis=1, skipna=True)
+
+    # 记录是哪一路驱动
+    def _which(row):
+        best, name = float("-inf"), ""
+        for c in pct_cols:
+            v = row[c]
+            if pd.notna(v) and v > best:
+                best, name = v, c
+        return name
+
+    out["driving"] = mats.apply(_which, axis=1)
+    out["coeff"] = out["max_pct"].apply(pct_to_coeff)
+
+    # 兼容旧字段名
+    out["combined_pct"] = out["max_pct"]
     return out
+
+
+def load_vix_daily(cfg: dict, n: int = 2000):
+    """
+    从 MT5 拉 VIX 日线（收盘价）。
+
+    失败返回 None —— 总分析师退回两路合成，不影响主流程。
+    """
+    try:
+        import MetaTrader5 as mt5
+    except ImportError:
+        return None
+
+    symbol = cfg.get("daily_analyst", {}).get("vix_symbol", "VIX")
+    mcfg = cfg.get("broker", {}).get("mt5", {})
+
+    try:
+        kwargs = {}
+        if mcfg.get("path"):
+            kwargs["path"] = mcfg["path"]
+        # 用全局单例（如果已经初始化过）
+        try:
+            from mt5_broker import MT5Client
+            client = MT5Client.shared(
+                login=mcfg.get("login"), password=mcfg.get("password"),
+                server=mcfg.get("server"), path=mcfg.get("path") or None)
+            ready = client._ready
+        except Exception:
+            ready = False
+
+        if not ready:
+            if not mt5.initialize(**kwargs):
+                return None
+
+        if not mt5.symbol_select(symbol, True):
+            return None
+
+        rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_D1, 0, n)
+        if rates is None or len(rates) == 0:
+            return None
+
+        ts = pd.to_datetime([r[0] for r in rates], unit="s")
+        close = [float(r[4]) for r in rates]
+        s = pd.Series(close, index=ts).sort_index()
+        return s
+    except Exception:
+        return None
 
 
 def pct_to_coeff(pct: float) -> float:
@@ -109,7 +189,14 @@ def get_prev_day_coeff(d1: pd.DataFrame, cfg: dict) -> dict:
     vol_w = da.get("vol_window", 20)
     atr_w = da.get("atr_window", 14)
 
-    state = compute_daily_state(d1, lookback, vol_w, atr_w)
+    vix = None
+    use_vix = da.get("use_vix", True)
+    if use_vix:
+        vix = load_vix_daily(cfg)
+        if vix is None or len(vix) < 100:
+            vix = None
+
+    state = compute_daily_state(d1, lookback, vol_w, atr_w, vix=vix)
     valid = state.dropna(subset=["combined_pct"])
     if len(valid) < 2:
         return dict(ok=False, coeff=1.0, reason="历史数据不足，按 1.0 处理")
@@ -126,8 +213,16 @@ def get_prev_day_coeff(d1: pd.DataFrame, cfg: dict) -> dict:
     else:
         reason = f"百分位 {pct:.1f}% < 90% → 正常"
 
+    vix_pct = float(prev["vix_pct"]) if "vix_pct" in prev and not pd.isna(prev["vix_pct"]) else None
+    driving = str(prev.get("driving", ""))
+    label = {"rv_pct": "已实现波动率", "atr_pct_pct": "ATR%", "vix_pct": "VIX"}.get(driving, driving)
+    if label:
+        reason += f"（由 {label} {pct:.1f}% 驱动）"
     return dict(ok=True, coeff=coeff, pct=pct,
                 rv_pct=float(prev["rv_pct"]),
                 atr_pct=float(prev["atr_pct_pct"]),
+                vix_pct=vix_pct,
+                vix_used=vix is not None,
+                driving=driving,
                 date=str(valid.index[-2]),
                 reason=reason)

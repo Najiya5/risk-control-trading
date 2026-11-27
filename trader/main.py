@@ -7,12 +7,13 @@
   - 数据：从本地 CSV 读取最新行情（后续可换成实时源）
   - 决策：OsMA 信号 + ATRP 波动率拦截 + 总分析师百分比拦截 + 事件系数
   - 下单：纸面模拟（broker.py）
-  - 纽约休盘前 5 分钟：平仓 + 撤单
+  - 纽约休盘前 10 分钟：平仓 + 撤单
   - 签字有效期 24 小时：过期只平仓不开新仓，程序不中断
 
 所有状态写到 state.json，日志写到 logs/。可随时 kill，下次启动自动接上。
 """
 
+import io
 import os
 import sys
 import json
@@ -95,7 +96,34 @@ def load_state(path, cfg):
     }
 
 
+# 只由 UI 写入、主循环不能覆盖的字段
+UI_OWNED_FIELDS = ("approved_until", "approved_at", "_report_read_date")
+
+
+def _sync_ui_fields(path, st):
+    """
+    保存前先从磁盘同步「UI 独占」字段。
+
+    主循环的 st 是启动时读的快照，UI 签字/标记已读写的是磁盘。
+    不同步的话，下一轮 save_state 会把 UI 的改动冲掉。
+    """
+    try:
+        if not os.path.exists(path):
+            return
+        with open(path, "r", encoding="utf-8-sig") as f:
+            disk = json.load(f)
+        for k in UI_OWNED_FIELDS:
+            if k in disk:
+                st[k] = disk[k]
+            elif k in st:
+                # 磁盘上没有（用户清空了签字），跟着清掉
+                del st[k]
+    except Exception:
+        pass
+
+
 def save_state(path, st):
+    _sync_ui_fields(path, st)
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(st, f, ensure_ascii=False, indent=2, default=str)
@@ -228,6 +256,7 @@ def check_events(cfg, st, logfile):
             pressures.append(p)
             log(f"事件[{e['time']}] severity={agg['severity']:.2f} "
                 f"n={agg['n']} blocked={blocked} {why or ''}", logfile)
+            _write_event_log(cfg, e, agg, blocked, why, p)
 
         if not pressures:
             return 0.0
@@ -246,6 +275,35 @@ def check_events(cfg, st, logfile):
         st["last_event_check"] = (
             now() + datetime.timedelta(minutes=25 * min(fails - 1, 5))).isoformat()
         return 0.0
+
+
+# ────────────────────────────────────────────────
+# 事件判断落盘
+# ────────────────────────────────────────────────
+
+def _write_event_log(cfg, event, agg, blocked, why, pressure):
+    """每判断完一条事件，追加一行到 logs/events.csv（JSON 行格式）"""
+    try:
+        path = os.path.join(HERE, cfg["logging"]["event_log"])
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        rec = {
+            "time": str(event.get("time", "")),
+            "date": datetime.date.today().isoformat(),
+            "title": str(event.get("title") or event.get("content") or "")[:120],
+            "severity": round(float(agg.get("severity", 0)), 3),
+            "impact": round(float(agg.get("impact", 0)), 3),
+            "horizon": agg.get("horizon", ""),
+            "n_judges": int(agg.get("n", 0)),
+            "blocked": bool(blocked),
+            "why": str(why or ""),
+            "pressure": round(float(pressure), 3),
+            "reason": str(agg.get("reason", ""))[:200],
+            "ts": datetime.datetime.now().isoformat(timespec="seconds"),
+        }
+        with io.open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    except Exception as ex:
+        print(f"[events.csv 写入失败] {type(ex).__name__}: {ex}", flush=True)
 
 
 # ────────────────────────────────────────────────

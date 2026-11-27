@@ -65,64 +65,34 @@ def load_event_log(path):
     return out
 
 
-def fetch_calendar(days_ahead=3):
+def fetch_calendar(days_ahead=3, cfg=None, state=None):
     """
-    拉金十财经日历（未来 N 天）。
-    失败就返回空列表，不抛异常。
+    拉未来 N 天的财经日历。
+
+    金十优先，失败自动降级到备用源。
+    所有技术问题都会写日志（见 calendar_source.py）。
     """
-    import urllib.request
-
-    APP_ID = "bVBF4FyRTn5NJF5n"
-    H = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-        "x-app-id": APP_ID,
-        "x-version": "1.0.0",
-        "Referer": "https://www.jin10.com/",
-    }
-
-    events = []
-    today = datetime.date.today()
-    for delta in range(0, days_ahead + 1):
-        d = today + datetime.timedelta(days=delta)
-        url = (f"https://cdn-rili.jin10.com/web_data/{d.year}/daily/"
-               f"{d.month:02d}/{d.day:02d}/economics.json")
-        try:
-            req = urllib.request.Request(url, headers=H)
-            with urllib.request.urlopen(req, timeout=10) as r:
-                raw = r.read()
-            if len(raw) < 5:
-                continue
-            data = json.loads(raw.decode("utf-8", errors="replace"))
-            if not isinstance(data, list):
-                continue
-            for it in data:
-                name = (it.get("name") or "").strip()
-                if not name:
-                    continue
-                # 只看重要数据（星级 >= 2 或 含关键词）
-                star = it.get("star", 0)
-                try:
-                    star = int(star)
-                except Exception:
-                    star = 0
-                events.append(dict(
-                    date=str(d), time=str(it.get("time", "")),
-                    name=name, star=star,
-                    country=str(it.get("country", "")),
-                    actual=str(it.get("actual", "")),
-                    forecast=str(it.get("forecast", "")),
-                    previous=str(it.get("previous", "")),
-                ))
-        except Exception:
-            continue
-    return events
+    try:
+        import calendar_source
+        events, info = calendar_source.fetch_calendar(
+            days_ahead, cfg=cfg, st=state)
+        return events, info
+    except Exception as ex:
+        return [], dict(source=None, jin10_ok=False,
+                        errors=[f"{type(ex).__name__}: {ex}"],
+                        note="日历模块异常")
 
 
 def gold_relevant(ev):
-    """判断这条数据是否可能影响黄金"""
-    keys = ["美联储", "FOMC", "CPI", "通胀", "非农", "GDP", "利率", "就业",
-            "PCE", "PPI", "零售", "失业", "鲍威尔", "货币政策", "缩表", "加息",
-            "降息", "美元", "国债", "PMI", "ISM"]
+    """
+    判断这条数据是否可能影响黄金。
+
+    现在的数据源已经按 USD + 中高影响筛过了，
+    所以 USD 的一律保留；其他货币看关键词。
+    """
+    if ev.get("country") == "USD":
+        return ev.get("star", 0) >= 2
+    keys = ["FOMC", "CPI", "Fed", "Powell", "NFP", "GDP", "Rate", "ECB", "BoJ"]
     text = ev.get("name", "") + ev.get("country", "")
     return any(k in text for k in keys) or ev.get("star", 0) >= 3
 
@@ -218,10 +188,20 @@ def build_report(cfg, state, date_str=None):
     add("【四、未来三天重要数据公布】")
     add("-" * 66)
     try:
-        cal = fetch_calendar(3)
+        cal, cal_info = fetch_calendar(3, cfg=cfg, state=state)
         rel = [e for e in cal if gold_relevant(e)]
-        if not rel:
-            add("  （接口未返回数据，或未来三天无重要数据）")
+
+        src_tag = {"jin10": "金十", "backup": "备用源(showmytrades)", None: "无"}.get(
+            cal_info.get("source"), cal_info.get("source"))
+        if cal_info.get("source"):
+            add(f"  数据源：{src_tag}")
+            if cal_info.get("errors"):
+                for er in cal_info["errors"]:
+                    add(f"    ⚠ {er}")
+        if cal_info.get("source") is None:
+            add("  （所有日历数据源不可用，详见 logs/calendar_source.log）")
+        elif not rel:
+            add("  （未来三天无 USD 中高影响数据 —— 节假期或数据空窗属正常）")
         else:
             cur_day = None
             for e in rel:
@@ -231,7 +211,7 @@ def build_report(cfg, state, date_str=None):
                 add(f"    {e['time']:<8} {'★' * max(e['star'], 1):<4} "
                     f"{e['country']:<6} {e['name']}")
     except Exception as ex:
-        add(f"  （日历接口异常：{type(ex).__name__}）")
+        add(f"  （日历接口异常：{type(ex).__name__} —— 不影响交易）")
 
     add("")
     add("=" * 66)

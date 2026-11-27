@@ -1,5 +1,5 @@
 {
-  "_说明": "配置模板。复制为 config.json 后填入你自己的账号和 API key。",
+  "_说明": "配置模板。复制为 config.json 后填入自己的账号和 API key。",
   "symbol": "XAUUSD",
   "timeframe": "M5",
   "analysis_timeframe_1": "H4",
@@ -28,7 +28,10 @@
     "vol_window": 20,
     "atr_window": 14,
     "pct_gate": 98.0,
-    "_note": "流动性百分位 > pct_gate 时当天不开新仓（只做不做，不调量）"
+    "_note": "流动性百分位 > pct_gate 时当天不开新仓（只做不做，不调量）",
+    "use_vix": true,
+    "vix_symbol": "VIX",
+    "_vix_note": "三路取最大：已实现波动率 / ATR% / VIX 各自算百分位，任一≥98%暂停、90-98%减半"
   },
   "event_layer": {
     "enabled": true,
@@ -56,7 +59,7 @@
     "_note": "事件层 = 订单风控的一半权重。多模型平均 severity，超过阈值平一半仓位"
   },
   "schedule": {
-    "flat_before_newyork_close_minutes": 5,
+    "flat_before_newyork_close_minutes": 10,
     "newyork_close_utc_hours": 21,
     "_note": "纽约 17:00 EDT = 21:00 UTC；冬令时 16:00 EST = 22:00 UTC，程序会按夏令时自动调整",
     "daily_report_time_local": "23:00",
